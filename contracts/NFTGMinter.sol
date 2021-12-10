@@ -3,12 +3,12 @@ pragma solidity 0.6.12;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import "./NFTGToken.sol";
+import "./libs/IBEP20.sol";
 
 // NFTGlobal Minter with NFTG in the contracts.
 contract NFTGMinter is Ownable, ReentrancyGuard {
     // The NFTG TOKEN!
-    NFTGlobal public nftGlobal;
+    IBEP20 public nftGlobal;
 
     // The operator can only withdraw wrong tokens in the contract
     address private _operator;
@@ -28,7 +28,7 @@ contract NFTGMinter is Ownable, ReentrancyGuard {
         _;
     }
 
-    constructor(NFTGlobal _nftGlobal) public {
+    constructor(IBEP20 _nftGlobal) public {
         nftGlobal = _nftGlobal;
         _operator = _msgSender();
 
@@ -43,10 +43,18 @@ contract NFTGMinter is Ownable, ReentrancyGuard {
     {
         uint256 nftgBal = nftGlobal.balanceOf(address(this));
         if (_amount > nftgBal) {
-            nftGlobal.transfer(_to, nftgBal);
-        } else {
+            _amount = nftgBal;
+        }
+        if (_amount > 0) {
             nftGlobal.transfer(_to, _amount);
         }
+    }
+
+    /**
+     * @dev operator of the contract
+     */
+    function operator() public view returns (address) {
+        return _operator;
     }
 
     /**
@@ -72,7 +80,7 @@ contract NFTGMinter is Ownable, ReentrancyGuard {
         external
         onlyOperator
     {
-        IERC20(_tokenAddress).transfer(msg.sender, _tokenAmount);
+        IBEP20(_tokenAddress).transfer(msg.sender, _tokenAmount);
         emit OperatorTokenRecovery(_tokenAddress, _tokenAmount);
     }
 }
