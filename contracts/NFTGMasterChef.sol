@@ -3,7 +3,7 @@ pragma solidity 0.6.12;
 import "@pancakeswap/pancake-swap-lib/contracts/math/SafeMath.sol";
 import "@pancakeswap/pancake-swap-lib/contracts/access/Ownable.sol";
 
-import "./NFTGToken.sol";
+import "./libs/IBEP20.sol";
 import "./NFTGMinter.sol";
 
 // import "@nomiclabs/buidler/console.sol";
@@ -37,7 +37,7 @@ contract NFTGMasterChef is Ownable {
 
     // Info of each pool.
     struct PoolInfo {
-        IERC20 lpToken; // Address of LP token contract.
+        IBEP20 lpToken; // Address of LP token contract.
         uint256 lpSupply; // Pool lp supply
         uint256 allocPoint; // How many allocation points assigned to this pool. NFTGs to distribute per block.
         uint256 lastRewardBlock; // Last block number that NFTGs distribution occurs.
@@ -46,7 +46,7 @@ contract NFTGMasterChef is Ownable {
     }
 
     // The NFTG TOKEN!
-    NFTGlobal public nftg;
+    IBEP20 public nftg;
     // The NFTG Minter!
     NFTGMinter public minter;
     // Dev address.
@@ -85,7 +85,7 @@ contract NFTGMasterChef is Ownable {
     event UpdateEmissionRate(address indexed user, uint256 nftgPerBlock);
 
     constructor(
-        NFTGlobal _nftg,
+        IBEP20 _nftg,
         NFTGMinter _minter,
         address _devaddr,
         address _feeAddress,
@@ -125,8 +125,8 @@ contract NFTGMasterChef is Ownable {
         return poolInfo.length;
     }
 
-    mapping(IERC20 => bool) public poolExistence;
-    modifier nonDuplicated(IERC20 _lpToken) {
+    mapping(IBEP20 => bool) public poolExistence;
+    modifier nonDuplicated(IBEP20 _lpToken) {
         require(poolExistence[_lpToken] == false, "nonDuplicated: duplicated");
         _;
     }
@@ -135,7 +135,7 @@ contract NFTGMasterChef is Ownable {
     // XXX DO NOT add the same LP token more than once. Rewards will be messed up if you do.
     function add(
         uint256 _allocPoint,
-        IERC20 _lpToken,
+        IBEP20 _lpToken,
         uint16 _depositFeeBP,
         bool _withUpdate
     ) public onlyOwner nonDuplicated(_lpToken) {
