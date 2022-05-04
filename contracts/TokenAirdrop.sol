@@ -1,7 +1,3 @@
-/**
- *Submitted for verification at BscScan.com on 2022-01-12
- */
-
 pragma solidity ^0.6.0;
 
 // SPDX-License-Identifier: MIT
@@ -216,20 +212,85 @@ abstract contract Ownable is Context {
     }
 }
 
+/**
+ * @dev These functions deal with verification of Merkle Trees proofs.
+ *
+ * The proofs can be generated using the JavaScript library
+ * https://github.com/miguelmota/merkletreejs[merkletreejs].
+ * Note: the hashing algorithm should be keccak256 and pair sorting should be enabled.
+ *
+ * See `test/utils/cryptography/MerkleProof.test.js` for some examples.
+ */
+library MerkleProof {
+    /**
+     * @dev Returns true if a `leaf` can be proved to be a part of a Merkle tree
+     * defined by `root`. For this, a `proof` must be provided, containing
+     * sibling hashes on the branch from the leaf to the root of the tree. Each
+     * pair of leaves and each pair of pre-images are assumed to be sorted.
+     */
+    function verify(
+        bytes32[] memory proof,
+        bytes32 root,
+        bytes32 leaf
+    ) internal pure returns (bool) {
+        return processProof(proof, leaf) == root;
+    }
+
+    /**
+     * @dev Returns the rebuilt hash obtained by traversing a Merklee tree up
+     * from `leaf` using `proof`. A `proof` is valid if and only if the rebuilt
+     * hash matches the root of the tree. When processing the proof, the pairs
+     * of leafs & pre-images are assumed to be sorted.
+     *
+     * _Available since v4.4._
+     */
+    function processProof(bytes32[] memory proof, bytes32 leaf)
+        internal
+        pure
+        returns (bytes32)
+    {
+        bytes32 computedHash = leaf;
+        for (uint256 i = 0; i < proof.length; i++) {
+            bytes32 proofElement = proof[i];
+            if (computedHash <= proofElement) {
+                // Hash(current computed hash + current element of the proof)
+                computedHash = _efficientHash(computedHash, proofElement);
+            } else {
+                // Hash(current element of the proof + current computed hash)
+                computedHash = _efficientHash(proofElement, computedHash);
+            }
+        }
+        return computedHash;
+    }
+
+    function _efficientHash(bytes32 a, bytes32 b)
+        private
+        pure
+        returns (bytes32 value)
+    {
+        assembly {
+            mstore(0x00, a)
+            mstore(0x20, b)
+            value := keccak256(0x00, 0x40)
+        }
+    }
+}
+
 contract TokenAirdrop is Ownable {
     using SafeMath for uint256;
 
     IBEP20 public airToken;
 
-    uint256 public startDate = 1648814400; // Friday, April 1, 2022 12:00:00 PM UTC
-    uint256 public endDate = 1648900800; // Saturday, April 2, 2022 12:00:00 PM UTC
+    uint256 public startDate = 1651659000; // Friday, April 1, 2022 12:00:00 PM UTC
+    uint256 public endDate = 1652523000; // Saturday, April 2, 2022 12:00:00 PM UTC
 
     uint16 public airdropMultiply = 150; // Airdrop 1.5x of transferred amount
 
     uint256 public totalDropped;
 
+    bytes32 public merkleRoot;
+
     mapping(address => uint256) public userInfo;
-    mapping(address => bool) public whitelist;
 
     event TokensDropped(
         address indexed user,
@@ -242,14 +303,25 @@ contract TokenAirdrop is Ownable {
     }
 
     // Claim tokens
-    function claim(uint256 _amount) external {
+    function claim(
+        uint256 _amount,
+        uint256 _merkleIndex,
+        uint256 _merkleAmount,
+        bytes32[] calldata _merkleProof
+    ) external {
         require(now >= startDate && now <= endDate, "Airdrop not opened");
         require(_amount > 0, "Invalid zero amount");
-        require(whitelist[msg.sender], "Not white-listed account");
-        require(userInfo[msg.sender] == 0, "Already claimed");
+        require(
+            isWhiteListed(
+                toLeaf(_merkleIndex, _msgSender(), _merkleAmount),
+                _merkleProof
+            ),
+            "No whitelisted account"
+        );
+        require(userInfo[_msgSender()] == 0, "Already claimed");
 
         uint256 balanceBefore = airToken.balanceOf(address(this));
-        airToken.transferFrom(msg.sender, address(this), _amount);
+        airToken.transferFrom(_msgSender(), address(this), _amount);
         _amount = airToken.balanceOf(address(this)).sub(balanceBefore);
 
         uint256 amountBack = _amount.mul(airdropMultiply).div(100);
@@ -259,10 +331,10 @@ contract TokenAirdrop is Ownable {
         );
 
         totalDropped = totalDropped.add(amountBack);
-        userInfo[msg.sender] = userInfo[msg.sender].add(amountBack);
-        airToken.transfer(msg.sender, amountBack);
+        userInfo[_msgSender()] = userInfo[_msgSender()].add(amountBack);
+        airToken.transfer(_msgSender(), amountBack);
 
-        emit TokensDropped(msg.sender, _amount, amountBack);
+        emit TokensDropped(_msgSender(), _amount, amountBack);
     }
 
     // Set new airdrop multiply
@@ -272,45 +344,11 @@ contract TokenAirdrop is Ownable {
         airdropMultiply = _airdropMultiply;
     }
 
-    // Exclude bulk accounts from whitelist
-    // only owner can call this function
-    function excludeBulkWhitelist(address[] memory _whitelist) external onlyOwner {
-        for (uint256 i = 0; i < _whitelist.length; i++) {
-            whitelist[_whitelist[i]] = false;
-        }
-    }
-
-    // Include bulk accounts from whitelist
-    // only owner can call this function
-    function includeBulkWhitelist(address[] memory _whitelist) external onlyOwner {
-        for (uint256 i = 0; i < _whitelist.length; i++) {
-            whitelist[_whitelist[i]] = true;
-        }
-    }
-
-    // Exclude an account from whitelist
-    // only owner can call this function
-    function excludeWhitelist(address _account) external onlyOwner {
-        require(whitelist[_account], "Not white-listed before");
-        require(userInfo[_account] == 0, "Already claimed tokens");
-        whitelist[_account] = false;
-    }
-
-    // Include an account into whitelist
-    // only owner can call this function
-    function includeWhitelist(address _account) external onlyOwner {
-        require(!whitelist[_account], "Already white-listed");
-        whitelist[_account] = true;
-    }
-
     // Set airdrop start date
     // only owner can call this function
     function setStartDate(uint256 _startDate) external onlyOwner {
         require(now <= startDate, "Airdrop started already");
-        require(
-            now <= _startDate,
-            "Start date should be future date"
-        );
+        require(now <= _startDate, "Start date should be future date");
         require(_startDate <= endDate, "Start date should be before end date");
         startDate = _startDate;
     }
@@ -336,5 +374,27 @@ contract TokenAirdrop is Ownable {
         uint256 remainedTokens = airToken.balanceOf(address(this));
         require(remainedTokens > 0, "No tokens remained");
         airToken.transfer(owner(), remainedTokens);
+    }
+
+    // Generate the leaf node (just the hash of account concatenated with the account address)
+    function toLeaf(
+        uint256 index,
+        address account,
+        uint256 amount
+    ) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(index, account, amount));
+    }
+
+    // Verify that a given leaf is in the tree.
+    function isWhiteListed(bytes32 _leafNode, bytes32[] calldata _proof)
+        public
+        view
+        returns (bool)
+    {
+        return MerkleProof.verify(_proof, merkleRoot, _leafNode);
+    }
+
+    function setMerkleRoot(bytes32 _root) external onlyOwner {
+        merkleRoot = _root;
     }
 }
