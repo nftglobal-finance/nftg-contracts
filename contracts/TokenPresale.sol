@@ -358,6 +358,11 @@ interface IERC20 {
     function balanceOf(address account) external view returns (uint256);
 
     /**
+     * @dev Returns the decimals
+     */
+    function decimals() external view returns (uint8);
+
+    /**
      * @dev Moves `amount` tokens from the caller's account to `to`.
      *
      * Returns a boolean value indicating whether the operation succeeded.
@@ -633,133 +638,173 @@ contract TokenPresale is Ownable {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
-    IERC20 public presaleToken;
+    IERC20 public immutable presaleToken;
 
     uint256 public startDate = 1653670800; // May 27 2022 05:00:00 PM UTC
-    uint256 public endDate = 1649163600; // May 30, 2022 05:00:00 PM UTC
+    uint256 public endDate = 1653930000; // May 30, 2022 05:00:00 PM UTC
+    uint256 public claimDate = 1654016400; // May 31, 2022 05:00:00 PM UTC
 
     uint256 public hardcap = 0; // hardcap: Unlimited
     uint256 public softcap = 100 ether; // softcap
     uint256 public tokenPrice = 0.05 ether; // token presale price
     uint256 public minBuy = 0.5 ether; // minimum buy amount
     uint256 public maxBuy = 10 ether; // maximum buy amount
-    uint256 public totalSold;
 
-    mapping(address => uint256) public boughtPerUser;
+    uint256 public totalSold; // total sold in ether
+    uint256 public totalClaimed; // total claimed in ether
+    uint256 public totalContributors; // total contributor count
 
-    constructor(IERC20 _sellToken) {
-        _sellToken.balanceOf(address(this)); // To check the IERC20 contract
-        sellToken = _sellToken;
+    mapping(address => uint256) public userContributes;
+    mapping(address => bool) public userClaimed;
+
+    constructor(address _token) {
+        IERC20(_token).balanceOf(address(this)); // To check the IERC20 contract
+        presaleToken = IERC20(_token);
     }
 
     receive() external payable {}
 
-    // Function to buy TOKEN using BNB
+    /**
+     * @notice Join the presale with ETH
+     */
     function buyToken() external payable {
         require(
             block.timestamp >= startDate && block.timestamp < endDate,
-            "Ito not opened"
+            "Presale not opened"
         );
-        uint256 bnbAmount = msg.value;
-        uint256 tokensToBuy = bnbAmount.mul(1 ether).div(tokenPrice);
+        uint256 sumSoFar = userContributes[msg.sender].add(msg.value);
+        require(sumSoFar >= minBuy, "Too small buy amount");
+        require(maxBuy == 0 || sumSoFar <= maxBuy, "User maximum limited");
+
+        if (userContributes[msg.sender] == 0) {
+            totalContributors = totalContributors.add(1);
+        }
+        totalSold = totalSold.add(msg.value);
+        userContributes[msg.sender] = sumSoFar;
+
+        require(hardcap == 0 || totalSold <= hardcap, "Reached hardcap");
+    }
+
+    /**
+     * @notice Claim tokens after presale ends
+     */
+    function claimToken() external {
+        require(block.timestamp >= claimDate, "Not claimable yet");
+        require(!userClaimed[msg.sender], "Already claimed");
+        uint256 contributedAmount = userContributes[msg.sender];
+        uint256 contributedAmountTokens = tokenAmountFromEther(
+            contributedAmount
+        );
+        require(contributedAmountTokens > 0, "Nothing to claim");
         require(
-            tokensToBuy > 0 && bnbAmount >= minPerTransaction,
-            "Too small buy amount"
+            contributedAmountTokens <= presaleToken.balanceOf(address(this)),
+            "Insufficient balance"
         );
 
-        uint256 tokenBalance = sellToken.balanceOf(address(this));
-        require(tokensToBuy <= tokenBalance, "Insufficient balance");
+        presaleToken.safeTransfer(msg.sender, contributedAmountTokens);
 
-        uint256 sumSoFar = boughtPerUser[msg.sender].add(bnbAmount);
-        require(sumSoFar <= maxPerUser, "User maximum limited");
-
-        boughtPerUser[msg.sender] = sumSoFar;
-        totalSold = totalSold.add(bnbAmount);
-
-        require(totalSold <= hardcap, "Reached hardcap");
-
-        sellToken.transfer(msg.sender, tokensToBuy);
-
-        uint256 feeAmount = bnbAmount.mul(fee).div(10000);
-        if (feeAmount > 0) {
-            feeTo.transfer(feeAmount);
-            bnbAmount = bnbAmount.sub(feeAmount);
-        }
-        if (bnbAmount > 0) {
-            tokenOwner.transfer(bnbAmount);
-        }
+        totalClaimed = totalClaimed.add(contributedAmount);
+        userClaimed[msg.sender] = true;
     }
 
-    // function to set the presale start date
-    // only owner can call this function
-    function setStartDate(uint256 _startDate) external onlyOwner {
-        require(block.timestamp < startDate, "Ito already started");
-        require(_startDate <= endDate, "Start date should be before end date");
-        startDate = _startDate;
+    /**
+     * @notice Withdraw unsold tokens after presale
+     * @dev Only owner is allowed to call this function when presale is ended
+     */
+    function withdrawUnsoldTokens() external onlyOwner {
+        require(block.timestamp > endDate, "Presale not finished");
+        uint256 contractBalance = presaleToken.balanceOf(address(this));
+        uint256 totalUnclaimed = totalSold.sub(totalClaimed);
+        uint256 totalUnclaimedTokens = tokenAmountFromEther(totalUnclaimed);
+        require(contractBalance > totalUnclaimedTokens, "Nothing to withdraw");
+
+        presaleToken.safeTransfer(
+            _msgSender(),
+            contractBalance.sub(totalUnclaimedTokens)
+        );
     }
 
-    // function to set the presale end date
-    // only owner can call this function
-    function setEndDate(uint256 _endDate) external onlyOwner {
-        require(block.timestamp < startDate, "Ito already started");
-        require(startDate <= _endDate, "End date should be after start date");
+    /**
+     * @notice Withdraw collected funds after presale
+     * @dev Only owner is allowed to call this function when presale is ended
+     */
+    function withdrawFunds() external onlyOwner {
+        require(block.timestamp > endDate, "Presale not finished");
+        uint256 etherBalance = address(this).balance;
+        require(etherBalance > 0, "Nothing to withdraw");
+        payable(msg.sender).transfer(etherBalance);
+    }
+
+    function tokenAmountFromEther(uint256 etherAmount)
+        private
+        view
+        returns (uint256)
+    {
+        return etherAmount.mul(10**presaleToken.decimals()).div(tokenPrice);
+    }
+
+    /**
+     * @notice Update start / end / claim date of the presale
+     * @dev Only owner is allowed to call this function
+     */
+    function updateDates(
+        uint256 _startDate,
+        uint256 _endDate,
+        uint256 _claimDate
+    ) external onlyOwner {
+        require(
+            _startDate > block.timestamp &&
+                _endDate > _startDate &&
+                _claimDate > _endDate,
+            "Invalid dates"
+        );
+        require(block.timestamp < claimDate, "Already started to claim");
+        if (block.timestamp < startDate) {
+            startDate = _startDate;
+        }
         endDate = _endDate;
+        claimDate = _claimDate;
     }
 
+    /**
+     * @notice Update softcap / hardcap of the presale
+     * @dev Only owner is allowed to call this function
+     */
     function setCap(uint256 _hardcap, uint256 _softcap) external onlyOwner {
-        require(block.timestamp < startDate, "Ito already started");
-        require(_hardcap > 0 && _softcap > 0, "Non zero values");
-        require(_softcap <= _hardcap, "Invalid cap pair");
+        require(_hardcap == 0 || _softcap <= _hardcap, "Invalid cap pair");
         hardcap = _hardcap;
         softcap = _softcap;
     }
 
-    // function to set the minimal transaction amount
-    // only owner can call this function
-    function setMinPerTransaction(uint256 _minPerTransaction)
+    /**
+     * @notice Update min / max amount that a user can contribute
+     * @dev Only owner is allowed to call this function
+     */
+    function updateMinMaxBuy(uint256 _minBuy, uint256 _maxBuy)
         external
         onlyOwner
     {
-        require(
-            _minPerTransaction <= maxPerUser,
-            "Should be less than max per user"
-        );
-        minPerTransaction = _minPerTransaction;
+        require(_maxBuy == 0 || _minBuy <= _maxBuy, "Invalid inputs");
+        minBuy = _minBuy;
+        maxBuy = _maxBuy;
     }
 
-    // function to set the maximum amount which a user can buy
-    // only owner can call this function
-    function setMaxPerUser(uint256 _maxPerUser) external onlyOwner {
-        require(_maxPerUser > 0, "Invalid max value");
-        require(
-            _maxPerUser >= minPerTransaction,
-            "Should be over than min per transaction"
-        );
-        maxPerUser = _maxPerUser;
-    }
-
-    // function to set the total tokens to sell
-    // only owner can call this function
-    function setTokenPrice(uint256 _tokenPrice) external onlyOwner {
+    /**
+     * @notice Update token presale price
+     * @dev Only owner is allowed to call this function
+     */
+    function updateTokenPrice(uint256 _tokenPrice) external onlyOwner {
         require(_tokenPrice > 0, "Invalid token price");
         tokenPrice = _tokenPrice;
     }
 
-    //function to end the sale
-    //only owner can call this function
-    function endIto() external onlyOwner {
-        require(block.timestamp > startDate, "Not started yet");
+    /**
+     * @notice End presale
+     * @dev Only owner is allowed to call this function
+     */
+    function endPresale() external onlyOwner {
         require(block.timestamp < endDate, "Already finished");
         endDate = block.timestamp;
-    }
-
-    //function to withdraw unsold tokens
-    //only owner can call this function
-    function claimUnsoldTokens() external onlyOwner {
-        require(block.timestamp > endDate, "Ito not finished");
-        uint256 remainedTokens = sellToken.balanceOf(address(this));
-        require(remainedTokens > 0, "Nothing to claim");
-        sellToken.transfer(tokenOwner, remainedTokens);
     }
 
     /**
@@ -772,19 +817,12 @@ contract TokenPresale is Ownable {
         external
         onlyOwner
     {
-        require(_tokenAddress != address(sellToken), "Not allowed token");
+        require(_tokenAddress != address(presaleToken), "Not allowed token");
         require(_tokenAmount > 0, "Non zero value");
         uint256 balanceInContract = IERC20(_tokenAddress).balanceOf(
             address(this)
         );
         require(balanceInContract >= _tokenAmount, "Insufficient balance");
         IERC20(_tokenAddress).transfer(_msgSender(), _tokenAmount);
-    }
-
-    function recoverBnb(uint256 _amount) external onlyOwner {
-        require(_amount > 0, "Non zero value");
-        uint256 balanceInContract = address(this).balance;
-        require(balanceInContract >= _amount, "Insufficient balance");
-        payable(_msgSender()).transfer(_amount);
     }
 }
