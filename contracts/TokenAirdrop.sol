@@ -281,10 +281,10 @@ contract TokenAirdrop is Ownable {
 
     IBEP20 public airToken;
 
-    uint256 public startDate = 1651659000; // Friday, April 1, 2022 12:00:00 PM UTC
-    uint256 public endDate = 1652523000; // Saturday, April 2, 2022 12:00:00 PM UTC
+    uint256 public startDate = 1654100020; // Wed, June 1, 2022 16:13:40 UTC
+    uint256 public endDate = 1654964020; // Sat, June 11, 2022 16:13:40 PM UTC
 
-    uint16 public airdropMultiply = 150; // Airdrop 1.5x of transferred amount
+    uint16 public airdropMultiply = 120; // Airdrop 1.2x of transferred amount
 
     uint256 public totalDropped;
 
